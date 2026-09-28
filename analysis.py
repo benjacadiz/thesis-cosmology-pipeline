@@ -6,6 +6,7 @@ from sampler import check_convergence, get_bestfit
 import os
 from scipy.integrate import quad
 
+MPC_PER_KM = 3.24078e-20
 mapping = {"h0": r"H_0",
            "omega_m": r"\Omega_m",
            "x": r"x",
@@ -147,7 +148,7 @@ def omegaxi_to_xi(samples, params):
     omega_xi = samples[:, params_low.index("omega_xi")]
     H0 = samples[:, params_low.index("h0")]
 
-    return 3.0*H0 *  np.sqrt(omega_xi) * 3.2408e-20
+    return 3.0*(H0 * MPC_PER_KM) *  np.sqrt(omega_xi)
 
 def compute_omegal(samples, params):
     params_low = [p.lower() for p in params]
@@ -156,27 +157,6 @@ def compute_omegal(samples, params):
     omega_m = samples[:, params_low.index("omega_m")]
     omega_xi = samples[:, params_low.index("omega_xi")] if "omega_xi" in params_low else 0.0
     return 1.0 - omega_m - 2*np.sqrt(omega_xi)
-
-def compute_age(bestfit: dict[str, float], model = "flat_LCDM" ):
-    H0 = bestfit["H0"]
-    if model == "flat_LCDM":
-        omega_m = bestfit["Omega_m"]
-        Ez = lambda z: np.sqrt(omega_m * (1 + z)**3 + (1 - omega_m))
-    elif model == "UG_barotropic":
-        omega_m = bestfit["Omega_m"]
-        x = bestfit["xi"]
-        Ez = lambda z: np.sqrt(omega_m * (1 + x) * (1 + z)**(3/(1 + x)) + (1 - omega_m - x * omega_m))
-    elif model == "UG_CSL":
-        pass
-    elif model == "UG_CSL_baryon":
-        pass
-    else:
-        raise ValueError(f"Modelo desconocido: {model}")
-    integrand = lambda z: 1.0 / ((1.0+ z) *Ez)
-    age, err = quad(integrand, 0, np.inf)
-    age_Gyr = age / (H0 * 3.2408e-20) / (3.1536e16 * 1e9)
-    return age_Gyr
-    
 
 def aic_bic(chi2_min, k, N):
     aic = chi2_min + 2 * k

@@ -758,7 +758,6 @@ def warmup():
     
  
     print("cosmology.py: Numba kernels warmed up")
- 
 
 if __name__ == "__main__":
     warmup()
