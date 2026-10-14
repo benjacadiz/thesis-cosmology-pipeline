@@ -51,6 +51,12 @@ def E(z : float, theta : np.ndarray, params : list, model : str = "flat_LCDM") -
     elif model == "UG_CSL_baryon":
         raise ValueError("E(z) no disponible directamente para UG_CSL_baryon." \
                         "Usar H(z) o comoving_distance para obtener E(z) indirectamente.")
+    elif model == "cos_cosh":
+        Omega_m = _get_param(theta, params, "Omega_m")
+        w_a = _get_param(theta, params, "w_a")
+        w_b = _get_param(theta, params, "w_b")
+        w_c = _get_param(theta, params, "w_c")
+        return _E_coscosh_model(z, Omega_m, w_a, w_b, w_c)
     else:
         raise ValueError(f"Modelo no reconocido: {model}"
                          f"Modelos disponibles: {list(IDS.keys())}")
@@ -121,6 +127,10 @@ def comoving_distance(z: float, theta: np.ndarray, params: list, model: str = "f
     """
     H0 = _get_param(theta, params, "H0")
     
+    x = 0.0
+    w_a = 0.0
+    w_b = 0.0
+    w_c = 0.0
     model_id = np.int64(_get_model_id(model))
     if model_id == 0:
         Omega_m = _get_param(theta, params, "Omega_m")
@@ -138,13 +148,21 @@ def comoving_distance(z: float, theta: np.ndarray, params: list, model: str = "f
         xi_tilde = _get_param(theta, params, "xi_tilde")
         _, dc_interp = _get_csl_baryon_interpolators_z(H0, Omega_b0, Omega_dm0, xi_tilde)
         return float(dc_interp(np.atleast_1d(np.asarray(z, dtype=np.float64)))[0])
-    else:
-        x = 0.0
-    return _comoving_distance_single(float(z), H0, Omega_m, x, model_id)
+    elif model_id == 4: #cos_cosh
+        w_a = _get_param(theta, params, "w_a")
+        w_b = _get_param(theta, params, "w_b")
+        w_c = _get_param(theta, params, "w_c")
+        Omega_m = _get_param(theta, params, "Omega_m")
+    
+    return _comoving_distance_single(float(z), H0, Omega_m, x, w_a, w_b, w_c, model_id)
 
 def comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], theta : np.ndarray, params: list, model : str = "flat_LCDM") -> np.ndarray[Any, np.dtype[np.float64]]:
     H0 = _get_param(theta, params, "H0")
-    
+
+    x = 0.0
+    w_a = 0.0
+    w_b = 0.0
+    w_c = 0.0
     model_id = np.int64(_get_model_id(model))
     if model_id == 0:
         Omega_m = _get_param(theta, params, "Omega_m")
@@ -162,12 +180,15 @@ def comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], the
         xi_tilde = _get_param(theta, params, "xi_tilde")
         _, dc_interp = _get_csl_baryon_interpolators_z(H0, Omega_b0, Omega_dm0, xi_tilde)
         return dc_interp(z_array.astype(np.float64))
-    else:
-        x = 0.0
+    elif model_id == 4:
+        w_a = _get_param(theta, params, "w_a")
+        w_b = _get_param(theta, params, "w_b")
+        w_c = _get_param(theta, params, "w_c")
+        Omega_m = _get_param(theta, params, "Omega_m")
 
     sorted_idx = np.argsort(z_array)
     z_sorted = z_array[sorted_idx].astype(np.float64)
-    d_sorted = _comoving_distance_array(z_sorted, H0, Omega_m, x, model_id)
+    d_sorted = _comoving_distance_array(z_sorted, H0, Omega_m, x, w_a, w_b, w_c, model_id)
 
     result = np.empty_like(z_array)
     result[sorted_idx] = d_sorted
@@ -234,6 +255,11 @@ def ad_between_distances(z1: float, z2 : float, theta : np.ndarray, params: list
         raise ValueError(f"z2 debe ser mayor que z1. Recibido: z1={z1}, z2={z2}")
     
     H0 = _get_param(theta, params, "H0")
+    
+    x = 0.0
+    w_a = 0.0
+    w_b = 0.0
+    w_c = 0.0
     model_id = np.int64(_get_model_id(model))
     if model_id == 0:
         Omega_m = _get_param(theta, params, "Omega_m")
@@ -255,10 +281,13 @@ def ad_between_distances(z1: float, z2 : float, theta : np.ndarray, params: list
         dc_z1 = float(dc_interp(np.atleast_1d(np.asarray(z1, dtype=np.float64)))[0])
         dc_z2 = float(dc_interp(np.atleast_1d(np.asarray(z2, dtype=np.float64)))[0])
         return (dc_z2 - dc_z1) / (1.0 + z2)
-    else:
-        x = 0.0
+    elif model_id == 4:
+        Omega_m = _get_param(theta, params, "Omega_m")
+        w_a = _get_param(theta, params, "w_a")
+        w_b = _get_param(theta, params, "w_b")
+        w_c = _get_param(theta, params, "w_c")
 
-    return _angular_diameter_distance_between(float(z1), float(z2), H0, Omega_m, x, model_id)
+    return _angular_diameter_distance_between(float(z1), float(z2), H0, Omega_m, x, w_a, w_b, w_c, model_id)
 
 def dv_rd(z: float, theta: np.ndarray, params: list, rd: float, model: str = "flat_LCDM") -> float:
     """
@@ -325,6 +354,10 @@ def dh_rd(z: float, theta: np.ndarray, params: list, rd: float, model: str = "fl
 def H_array(z_array: np.ndarray, theta: np.ndarray, params: list, model: str = "flat_LCDM") -> np.ndarray:
     H0 = _get_param(theta, params, "H0")
     model_id = np.int64(_get_model_id(model))
+    x = 0.0
+    w_a = 0.0
+    w_b = 0.0
+    w_c = 0.0
     if model_id == 0:
         omega_m = _get_param(theta, params, "Omega_m")
 
@@ -342,18 +375,21 @@ def H_array(z_array: np.ndarray, theta: np.ndarray, params: list, model: str = "
         xi_tilde = _get_param(theta, params, "xi_tilde")
         H_interp, _ = _get_csl_baryon_interpolators_z(H0, Omega_b0, Omega_dm0, xi_tilde)
         return H_interp(z_array.astype(np.float64))
-    else:
-        x = 0.0
-    return _H_array_numba(z_array, H0, omega_m, x, model_id)
+    elif model_id == 4:
+            omega_m = _get_param(theta, params, "Omega_m")
+            w_a = _get_param(theta, params, "w_a")
+            w_b = _get_param(theta, params, "w_b")
+            w_c = _get_param(theta, params, "w_c")
+    return _H_array_numba(z_array, H0, omega_m, x, w_a, w_b, w_c, model_id)
 
 
 @njit(fastmath=True)
-def _H_array_numba(z_array, H0, omega_m, x, model_id):
+def _H_array_numba(z_array, H0, omega_m, x, w_a, w_b, w_c, model_id):
     n_z = z_array.size
     H_array = np.empty(n_z)
     for k in range(n_z):
         zk = z_array[k]
-        Ez = _E_dispatch(zk, omega_m, x, model_id)
+        Ez = _E_dispatch(zk, omega_m, x, w_a, w_b, w_c, model_id)
         H_array[k] = H0 * Ez
     return H_array
 
@@ -367,18 +403,25 @@ def _E_barotropic_model(z : float, omega_m : float,  x : float) -> float:
     return (omega_m * (1.0 + x) * (1.0 + z)**(3/(1.0+x)) + omega_lambda) ** 0.5
 
 @njit(fastmath=True)
-def _E_dispatch(z, omega_m, x, model_id):
+def _E_coscosh_model(z: float, omega_m: float, w_a: float, w_b: float, w_c: float) -> float:
+    a = 1.0 / (1.0 + z)
+    rho_de = np.exp(-3 * ((1-w_c) * np.log(a) - w_b * (np.sinh(a) - np.sinh(1)) + w_a * (np.sin(a) - np.sin(1))))
+    return (omega_m * (1.0 + z)**3 + (1.0 - omega_m) * rho_de) ** 0.5
+@njit(fastmath=True)
+def _E_dispatch(z, omega_m, x, w_a = 0, w_b = 0, w_c = 0, model_id = 0):
     if model_id == 0:
         return _E_flat_lcdm(z, omega_m)
     elif model_id == 1:
         return _E_barotropic_model(z, omega_m, x)
 #    elif model_id == 2:
 #        return _E_csl(z, omega_m, x)
+    elif model_id == 4:
+        return _E_coscosh_model(z, omega_m, w_a, w_b, w_c)
     else:
         return -1.0
     
 @njit(fastmath=True)
-def _comoving_distance_single(z : float, H0 : float, omega_m : float, x : float, model_id : int, n : int = 300) -> float:
+def _comoving_distance_single(z : float, H0 : float, omega_m : float, x : float, w_a, w_b, w_c, model_id : int, n : int = 300) -> float:
     if z <= 0.0:
         return 0.0
 
@@ -387,13 +430,13 @@ def _comoving_distance_single(z : float, H0 : float, omega_m : float, x : float,
     for k in range(n+1):
         zp = k * dz
         w = 0.5 if (k==0 or k==n) else 1.0
-        Ez = _E_dispatch(zp, omega_m, x, model_id)
+        Ez = _E_dispatch(zp, omega_m, x, w_a, w_b, w_c, model_id)
         integral += w/Ez
     
     return (c/ H0) * dz * integral
 
 @njit(parallel = True, fastmath=True)
-def _comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], H0 : float, omega_m : float, x : float, model_id : int, n : int = 300) -> np.ndarray[Any, np.dtype[np.float64]]:
+def _comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], H0 : float, omega_m : float, x : float, w_a, w_b, w_c, model_id : int, n : int = 300) -> np.ndarray[Any, np.dtype[np.float64]]:
 
     z_max = z_array[-1]
     dz = z_max / (n-1)
@@ -401,7 +444,7 @@ def _comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], H0
     integrand = np.empty(n)
     for k in prange(n):
         zp = k * dz
-        Ez = _E_dispatch(zp, omega_m, x, model_id)
+        Ez = _E_dispatch(zp, omega_m, x, w_a, w_b, w_c, model_id)
         integrand[k] = 1.0 / Ez
     d_grid = np.empty(n)
     d_grid[0] = 0.0
@@ -428,14 +471,14 @@ def _comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], H0
     return result
 
 @njit(fastmath=True)
-def _angular_diameter_distance_between(z1 : float, z2 : float, H0 : float, omega_m : float, x : float, model_id : int, n : int = 300) -> float:
+def _angular_diameter_distance_between(z1 : float, z2 : float, H0 : float, omega_m : float, x : float, w_a, w_b, w_c, model_id : int, n : int = 300) -> float:
     
     dz = (z2-z1) / n
     integral = 0.0
     for k in range(n+1):
         zp = z1 + k * dz
         w = 0.5 if (k==0 or k==n) else 1.0
-        Ez = _E_dispatch(zp, omega_m, x, model_id)
+        Ez = _E_dispatch(zp, omega_m, x, w_a, w_b, w_c, model_id)
         integral += w/Ez
     dc_12 = (c/ H0) * dz * integral
     return dc_12 / (1.0 + z2)
@@ -746,16 +789,25 @@ def warmup():
 
     tt_grid_test = np.linspace(-5, 0, 50)
 
+    params_cos_cosh = ["H0", "omega_m", "w_a", "w_b", "w_c"]
+    theta_cos_cosh  = np.array([70.0, 0.3, 0.1, 0.1, 0.1])
 
     comoving_distance(0.5, theta_lcdm, params_lcdm)
     comoving_distance_array(z_test, theta_lcdm, params_lcdm)
+    ad_between_distances(0.5, 1.5, theta_lcdm, params_lcdm)
+
     comoving_distance(0.5, theta_ug, params_ug, model="UG_barotropic")
     comoving_distance_array(z_test, theta_ug, params_ug, model="UG_barotropic")
-    ad_between_distances(0.5, 1.5, theta_lcdm, params_lcdm)
+    ad_between_distances(0.5, 1.5, theta_ug, params_ug, model="UG_barotropic")
+
     comoving_distance(0.5, theta_csl_a, params_csl_a, model="UG_CSL")
     comoving_distance_array(z_test, theta_csl_a, params_csl_a, model="UG_CSL")
     ad_between_distances(0.5, 1.5, theta_csl_a, params_csl_a, model="UG_CSL")
-    
+
+
+    comoving_distance(0.5, theta_cos_cosh, params_cos_cosh, model="cos_cosh")
+    comoving_distance_array(z_test, theta_cos_cosh, params_cos_cosh, model="cos_cosh")
+    ad_between_distances(0.5, 1.5, theta_cos_cosh, params_cos_cosh, model="cos_cosh")
  
     print("cosmology.py: Numba kernels warmed up")
 

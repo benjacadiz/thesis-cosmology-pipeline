@@ -4,8 +4,8 @@ import numpy as np
 IDS = {"flat_LCDM" : 0,
        "UG_barotropic" : 1,
        "UG_CSL" : 2,
-       "UG_CSL_baryon": 3}
-
+       "UG_CSL_baryon": 3,
+       "cos_cosh" : 4}
 _warmup_registry = []
 
 def register_warmup(func):

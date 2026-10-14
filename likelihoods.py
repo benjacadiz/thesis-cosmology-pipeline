@@ -20,7 +20,10 @@ PRIOR_RANGES = {
     "wb" : (0.0, 0.1), # El que entra en la fórmula de rd de DESI, no la densidad de bariones total,
     "omega_b0" : (0.0, 1.0), # Densidad de bariones
     "omega_dm0" : (0.0, 1.0), # Densidad de materia oscura
-    "xi_tilde" : (0.0, 3.0)  # Entra en UG_CSL_baryon
+    "xi_tilde" : (0.0, 3.0), # Entra en UG_CSL_baryon
+    "w_a" : (-2, 5),
+    "w_b" : (-2, 2),
+    "w_c" : (-2, 4)  
 }
 
 

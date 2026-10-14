@@ -19,6 +19,9 @@ mapping = {"h0": r"H_0",
            "xi_tilde" : r"\tilde{\xi}",
            "omega_b0" : r"\Omega_{b0}",
            "omega_dm0" : r"\Omega_{dm0}",
+           "w_a" : r"w_a",
+           "w_b" : r"w_b",
+           "w_c" : r"w_c"   
            }
 
 
@@ -111,7 +114,7 @@ def analyze(backend_path: str, params: list, datasets: dict, model: str = "flat_
 
     return {"gd_samples" : gd_samples,
             "bestfit" : bestfit,
-            "aic_bic" : ic["aic"],
+            "aic" : ic["aic"],
             "bic" : ic["bic"],
             "tau" : tau,
             "discard" : discard,
@@ -123,7 +126,7 @@ def compute_rd(samples, params, Neff = 3.044, model = "flat_LCDM"):
     params_low = [p.lower() for p in params]
     H0 = samples[:, params_low.index("h0")]
     h = H0 / 100.0
-    if model in ("flat_LCDM", "UG_CSL", "UG_barotropic"):
+    if model in ("flat_LCDM", "UG_CSL", "UG_barotropic", "cos_cosh"):
         omega_m = samples[:, params_low.index("omega_m")]
         omega_m_h2 = omega_m * h**2
         wb = samples[:, params_low.index("wb")]
@@ -134,7 +137,6 @@ def compute_rd(samples, params, Neff = 3.044, model = "flat_LCDM"):
         omega_m = omega_b + omega_dm
         omega_m_h2 = omega_m * h**2
         wb = omega_b * h**2
-    
     n = len(samples)
     if wb is None:
         rng = np.random.default_rng(seed = 42)
