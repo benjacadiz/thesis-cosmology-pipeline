@@ -12,6 +12,14 @@ _H0LICOW_FILES = {
     "WFI2033": "wfi2033_dt_bic.dat",
     "redshifts": "H0LiCOW_redshifts.txt",
 }
+_DESI_TRACERS= {
+    0.295: "BGS",
+    0.510: "LRG1",
+    0.706: "LRG2",
+    0.934: "LRG3",
+    1.321: "ELG1",
+    1.484: "ELG2",
+    2.330: "Lya"}
 
 
 
@@ -136,43 +144,41 @@ def load_desi(filepath : str, filepath_cov : str = None) -> dict[str, np.ndarray
 
     _check_file(filepath)
 
-    raw = np.genfromtxt(filepath, names=True, dtype=None, encoding="utf-8",
-                         missing_values="ND", filling_values=np.nan)
+    obs_list = []
+    tracers_dict = {}
     tracers = []
-    for row in raw:
-        name = str(row["qTracer"]).strip()
-        zeff = float(row["zeff"])
-        DVrd = float(row["DVrd"])
-        sigmaDVrd = float(row["sigmaDVrd"])
-        DMrd = float(row["DMrd"])
-        sigmaDMrd = float(row["sigmaDMrd"])
-        DHrd = float(row["DHrd"])
-        sigmaDHrd = float(row["sigmaDHrd"])
+    with open(filepath, "r") as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            z, value, qty = line.split()
+            z, value = float(z), float(value)
+            qty = qty.strip()
+            z_key = round(z, 3)
+            name = _DESI_TRACERS.get(z, f"z{z}")
 
-        has_DV = np.isfinite(DVrd)
-        has_2D = np.isfinite(DMrd) and np.isfinite(DHrd)
+            if z_key not in tracers_dict:
+                t_type = "dv" if qty == "DV_over_rs" else "dm_dh"
+                tracer = {"name" : name, "zeff" : z, "type" : t_type, "obs":[], "quantities":[]}
+                tracers_dict[z_key] = tracer
+                tracers.append(tracer)
 
-        if has_DV:
-            tracer = {"name": name,
-                       "zeff": zeff,
-                       "type" : "dv",
-                       "obs" : np.array([DVrd]),
-                       "sigma" : np.array([sigmaDVrd])}
-        elif has_2D:
-            tracer = {"name": name,
-                       "zeff": zeff,
-                       "type" : "dm_dh",
-                       "obs" : np.array([DMrd, DHrd]),
-                       "sigma" : np.array([sigmaDMrd, sigmaDHrd])}
-        else:
-            raise ValueError(f"Tracers {name} en DESI no tiene datos válidos ni para DV ni para DM/DH")
-        tracers.append(tracer)
-    
+            tracers_dict[z_key]["obs"].append(value)
+            tracers_dict[z_key]["quantities"].append(qty.replace("_over_rs", ""))
+            obs_list.append(value)
+
     for t in tracers:
-        t["cov_inv"] = np.diag(1.0 / t["sigma"]**2)
+        t["obs"] = np.array(t["obs"])
 
-    data = {"tracers" : tracers, "rd" :None}
-    _summarize_desi(data)
+    obs_vec = np.array(obs_list)
+    if filepath_cov is not None:
+        _check_file(filepath_cov)
+        cov = np.genfromtxt(filepath_cov).astype(np.float64)
+        cov_inv = np.linalg.inv(cov)
+    else:
+        raise ValueError("No se proporcionó un archivo de covarianza para DESI.")
+
+    data = {"tracers": tracers, "obs_vec": obs_vec, "cov_inv": cov_inv, "rd" : None}
     return data
 
 def load_h0licow(dirpath : str):
@@ -460,12 +466,19 @@ def _validate(data, name, required):
             raise ValueError(f"[{name}] Se encontraron {n_bad} valores no positivos en '{key}'")
 
 def _summarize_desi(data):
-    print(f"\n{'─'*45}")
+    print(f"\n{'─'*50}")
     print("Dataset: DESI BAO")
-    print(f"{'─'*45}")
+    print(f"{'─'*50}")
+    sigmas = np.sqrt(np.diag(np.linalg.inv(data["cov_inv"])))
+    idx = 0
     for t in data["tracers"]:
-        print(f"  Tracer {t['name']}: zeff={t['zeff']:.3f}, tipo={t['type']}, obs={t['obs']}, sigma={t['sigma']}")
-    print(f"{'─'*45}\n")
+        n = len(t["quantities"])
+        for i, (qty, obs) in enumerate(zip(t["quantities"], t["obs"])):
+            sigma = sigmas[idx]
+            print(f"  {t['name']:6s} z={t['zeff']:.3f}  {qty:5s} = {obs:.4f} ± {sigma:.4f}")
+            idx += 1
+    print(f"  Total observables: {len(data['obs_vec'])}")
+    print(f"{'─'*50}\n")
 
 def _summarize_bhs(data):
     print(f"\n{'─'*45}")

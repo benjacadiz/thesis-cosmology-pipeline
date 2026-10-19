@@ -4,7 +4,6 @@ from observables import mu_theoretical, Hz_theoretical,Ddt_theoretical, Dd_theor
 from cosmology import dv_rd, dm_rd, dh_rd
 from utils import _get_param, register_warmup
 
-
 G = 4.3009e-9 # Mpc M_sun^-1 (km/s)^2
 c = 299792.458 # km/s
 alpha_bhs = 3.0 * np.sqrt(3) # Factor de Schwarzschild para el radio de la sombra
@@ -21,12 +20,10 @@ PRIOR_RANGES = {
     "omega_b0" : (0.0, 1.0), # Densidad de bariones
     "omega_dm0" : (0.0, 1.0), # Densidad de materia oscura
     "xi_tilde" : (0.0, 3.0), # Entra en UG_CSL_baryon
-    "w_a" : (-2, 5),
-    "w_b" : (-2, 2),
-    "w_c" : (-2, 4)  
+    "w_a" : (-2, 5), # Parámetro de EoS de energía oscura en cos_cosh
+    "w_b" : (-2, 2), # Parámetro de EoS de energía oscura en cos_cosh
+    "w_c" : (-2, 4)  # Parámetro de EoS de energía oscura en cos_cosh
 }
-
-
 
 def log_prior(theta : np.ndarray, params : list[str]):
     # Prior planos dentro de los rangos estándar. Considera el modelo para definir parámetros
@@ -51,14 +48,20 @@ def log_prior(theta : np.ndarray, params : list[str]):
         omega_m = _get_param(theta, params, "omega_m")
         if omega_m + 2.0*np.sqrt(omega_xi) >= 1.0:
             return -np.inf
-    if "wb" in params:
-        wb = _get_param(theta, params, "wb")
-        lp += -0.5 * ((wb - 0.02218) / 0.00055)**2
+
+    # Prior gaussiano de wb de Big Bang Nucleosynthesis (BBN)
     if "omega_b0" in params:
         omega_b0 = _get_param(theta, params, "omega_b0")
         h = _get_param(theta, params, "h0") / 100.0
         wb = omega_b0 * h**2
         lp += -0.5 * ((wb - 0.02218) / 0.00055)**2
+    else:
+        if not ("wb" in params):
+            raise ValueError("No se encontró el parámetro 'wb' ni 'omega_b0' en los parámetros del modelo")
+        
+        wb = _get_param(theta, params, "wb")
+        lp += -0.5 * ((wb - 0.02218) / 0.00055)**2
+    
     return lp
 
 def log_likelihood_ohd(theta : np.ndarray, params : list[str], data : dict, model : str = "flat_LCDM"):
@@ -111,10 +114,10 @@ def log_likelihood_h0licow(theta: np.ndarray, params: list[str], data: dict, mod
     return ll
 
 def log_likelihood_desi(theta: np.ndarray, params: list[str], data: dict, model: str = "flat_LCDM"):
-    ll = 0.0
     H0 = _get_param(theta, params, "h0")
     h = H0 / 100.0
-    if model == "UG_CSL_baryon":
+
+    if model in ["LCDM_baryon", "UG_CSL_baryon"]:
         Omega_b0 = _get_param(theta, params, "omega_b0")
         Omega_dm0 = _get_param(theta, params, "omega_dm0")
         omega_m_desi = (Omega_b0 + Omega_dm0) * h**2
@@ -125,27 +128,26 @@ def log_likelihood_desi(theta: np.ndarray, params: list[str], data: dict, model:
         wb = _get_param(theta, params, "wb", default = 0.02236)
 
     rd = _rd_desi(omega_m_desi, wb)
-    
+
+    th_list = []
     for tracer in data["tracers"]:
         zeff = tracer["zeff"]
-        if tracer["type"] == "dv":
-            th_vec = np.array([dv_rd(zeff, theta, params, rd, model)])
-            obs_vec = tracer["obs"]
-            delta = obs_vec - th_vec
-            ll += -0.5 * float(delta @ (tracer["cov_inv"] @ delta))
+        for qty in tracer["quantities"]:
+            if qty == "DV":
+                th_list.append(dv_rd(zeff, theta, params, rd, model))
+            elif qty == "DM":
+                th_list.append(dm_rd(zeff, theta, params, rd, model))
+            elif qty == "DH":
+                th_list.append(dh_rd(zeff, theta, params, rd, model))
+            else:
+                raise ValueError(f"Cantidad desconocida para DESI: {qty}")
 
-        elif tracer["type"] == "dm_dh":
-            th_vec = np.array([dm_rd(zeff, theta, params, rd, model),
-                               dh_rd(zeff, theta, params, rd, model)])
-            ll += -0.5 * _chi2_desi_tracer(tracer["obs"], th_vec, tracer["cov_inv"])
+    th_vec = np.array(th_list)
+    delta = data["obs_vec"] - th_vec
 
-        else:
-            raise ValueError(f"Tipo de tracer desconocido en DESI: {tracer['type']}"
-                             f"Tipos disponibles: 'dv' y 'dm_dh'")
-        
-        if not np.isfinite(ll):
-            return -np.inf
-    return ll
+    if not np.all(np.isfinite(delta)):
+        return -np.inf
+    return -0.5 * float(delta @ (data["cov_inv"] @ delta))
 
 def log_likelihood_bhs(theta: np.ndarray, params: list[str], data: dict, model: str = "flat_LCDM"):
 
@@ -252,10 +254,6 @@ def _log_likelihood_hist1d(Ddt_th: float, hist1d_data):
         return -np.inf
     return log_density
 
-def _chi2_desi_tracer(obs_vec, th_vec, cov_inv):
-    delta = obs_vec - th_vec
-    return float(delta @ (cov_inv @ delta))
-
 @njit(fastmath=True)
 def _Da_from_M_theta(M, R, dM, dR):
     theta_rad = R * uas_to_rad
@@ -265,6 +263,7 @@ def _Da_from_M_theta(M, R, dM, dR):
 
 def _rd_desi(omega_m_desi, wb, N_eff = 3.044):
     return 147.05 * (wb / 0.02236)**(-0.13) * (omega_m_desi / 0.1432)**(-0.23) * (N_eff / 3.04)**(-0.1)
+
 #def aic(): pass
 #def bic(): pass
 #def evidence(): pass

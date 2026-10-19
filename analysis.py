@@ -131,7 +131,7 @@ def compute_rd(samples, params, Neff = 3.044, model = "flat_LCDM"):
         omega_m_h2 = omega_m * h**2
         wb = samples[:, params_low.index("wb")]
 
-    elif model in ("UG_CSL_baryon"):
+    elif model in ("UG_CSL_baryon", "LCDM_baryon"):
         omega_b = samples[:, params_low.index("omega_b0")]
         omega_dm = samples[:, params_low.index("omega_dm0")]
         omega_m = omega_b + omega_dm

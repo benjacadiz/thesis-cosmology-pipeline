@@ -5,7 +5,8 @@ IDS = {"flat_LCDM" : 0,
        "UG_barotropic" : 1,
        "UG_CSL" : 2,
        "UG_CSL_baryon": 3,
-       "cos_cosh" : 4}
+       "cos_cosh" : 4,
+       "LCDM_baryon" : 5}
 _warmup_registry = []
 
 def register_warmup(func):
