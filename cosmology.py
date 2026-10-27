@@ -2,13 +2,14 @@ import numpy as np
 from numbalsoda import lsoda_sig, lsoda
 from numba import njit, prange, cfunc
 from typing import Any
-from utils import _get_param, _get_model_id, register_warmup, IDS
+from utils import _get_param, _get_model_id, register_warmup, IDS, _build_param_vector
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 c = 299792.458 # Speed of light in km/s
 G = 4.3009e-9
 S_PER_GYR =  3.15576e16
 KM_PER_MPC = 3.08567e19
+T_CMB = 2.7255
 _csl_cache = {}
 _csl_baryon_cache = {}
 _csl_baryon_cache_z = {}
@@ -38,28 +39,41 @@ def E(z : float, theta : np.ndarray, params : list, model : str = "flat_LCDM") -
         The dimensionless Hubble parameter E(z) for the given redshift and cosmological parameters
 
     """
-    if model == "flat_LCDM":
-        Omega_m = _get_param(theta, params, "Omega_m")
-        return _E_flat_lcdm(z, Omega_m)
-    elif model == "UG_barotropic":
-        Omega_m = _get_param(theta, params, "Omega_m")
-        x = _get_param(theta, params, "x")
-        return _E_barotropic_model(z, Omega_m, x)
-    elif model == "UG_CSL":
-        raise ValueError("E(z) no disponible directamente para UG_CSL." \
-                        "Usar H(z) o comoving_distance para obtener E(z) indirectamente.")
-    elif model == "UG_CSL_baryon":
-        raise ValueError("E(z) no disponible directamente para UG_CSL_baryon." \
-                        "Usar H(z) o comoving_distance para obtener E(z) indirectamente.")
-    elif model == "cos_cosh":
-        Omega_m = _get_param(theta, params, "Omega_m")
-        w_a = _get_param(theta, params, "w_a")
-        w_b = _get_param(theta, params, "w_b")
-        w_c = _get_param(theta, params, "w_c")
-        return _E_coscosh_model(z, Omega_m, w_a, w_b, w_c)
+    model_id = np.int64(_get_model_id(model))
+    if model_id not in (list(IDS.values())):
+        raise ValueError(f"Modelo no reconocido: {model}. Modelos disponibles: {list(IDS.keys())}")
+    
+    if model_id in (2, 3): # UG_CSL and UG_CSL_baryon
+        raise ValueError(f"E(z) no disponible directamente para {model}. Usar H(z) o comoving_distance para obtener E(z) indirectamente.")
     else:
-        raise ValueError(f"Modelo no reconocido: {model}"
-                         f"Modelos disponibles: {list(IDS.keys())}")
+        theta_vector = _build_param_vector(model_id, theta, params)
+        return _E_dispatch(z, model_id, theta_vector)
+    #if model == "flat_LCDM":
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #    return _E_flat_lcdm(z, Omega_m)
+    #elif model == "UG_barotropic":
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #    x = _get_param(theta, params, "x")
+    #    return _E_barotropic_model(z, Omega_m, x)
+    #elif model == "UG_CSL":
+    #    raise ValueError("E(z) no disponible directamente para UG_CSL." \
+    #                    "Usar H(z) o comoving_distance para obtener E(z) indirectamente.")
+    #elif model == "UG_CSL_baryon":
+    #    raise ValueError("E(z) no disponible directamente para UG_CSL_baryon." \
+    #                    "Usar H(z) o comoving_distance para obtener E(z) indirectamente.")
+    #elif model == "cos_cosh":
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #    w_a = _get_param(theta, params, "w_a")
+    #    w_b = _get_param(theta, params, "w_b")
+    #    w_c = _get_param(theta, params, "w_c")
+    #    return _E_coscosh_model(z, Omega_m, w_a, w_b, w_c)
+    #elif model == "LCDM_baryon":
+    #    Omega_dm = _get_param(theta, params, "Omega_dm0")
+    #    Omega_b = _get_param(theta, params, "Omega_b0")
+    #    return _E_LCDMb(z, Omega_dm, Omega_b)
+    #else:
+    #    raise ValueError(f"Modelo no reconocido: {model}"
+    #                     f"Modelos disponibles: {list(IDS.keys())}")
 
 def H(z: float, theta: np.ndarray, params: list, model = "flat_LCDM") -> float:
     """
@@ -96,10 +110,9 @@ def H(z: float, theta: np.ndarray, params: list, model = "flat_LCDM") -> float:
         xi_tilde = _get_param(theta, params, "xi_tilde")
         H_interp, _ = _get_csl_baryon_interpolators_z(H0, Omega_b0, Omega_dm0, xi_tilde)
         return float(H_interp(np.atleast_1d(np.asarray(z, dtype=np.float64)))[0])
-
     return H0 * E(z, theta, params, model)
 
-def comoving_distance(z: float, theta: np.ndarray, params: list, model: str = "flat_LCDM") -> float:
+def comoving_distance(z: float, theta: np.ndarray, params: list, model: str = "flat_LCDM", n=300) -> float:
     """
     Function that returns the comoving distance D_c(z) for a given redshift z and cosmological parameters theta.
     The model by default is the flat Lambda CDM model for late universe.
@@ -126,18 +139,11 @@ def comoving_distance(z: float, theta: np.ndarray, params: list, model: str = "f
         The comoving distance D_c(z) for the given redshift and cosmological parameters
     """
     H0 = _get_param(theta, params, "H0")
-    
-    x = 0.0
-    w_a = 0.0
-    w_b = 0.0
-    w_c = 0.0
     model_id = np.int64(_get_model_id(model))
-    if model_id == 0:
-        Omega_m = _get_param(theta, params, "Omega_m")
-    if model_id == 1: # barotropic UG
-        Omega_m = _get_param(theta, params, "Omega_m")
-        x = _get_param(theta, params, "x")
-    elif model_id == 2: 
+    if model_id not in (list(IDS.values())):
+        raise ValueError(f"Modelo no reconocido: {model}. Modelos disponibles: {list(IDS.keys())}")
+
+    if model_id == 2: 
         omega_xi = _get_param(theta, params, "omega_xi")
         Omega_m = _get_param(theta, params, "Omega_m")
         _, dc_interp = _get_csl_interpolators(H0, Omega_m, omega_xi)
@@ -148,28 +154,31 @@ def comoving_distance(z: float, theta: np.ndarray, params: list, model: str = "f
         xi_tilde = _get_param(theta, params, "xi_tilde")
         _, dc_interp = _get_csl_baryon_interpolators_z(H0, Omega_b0, Omega_dm0, xi_tilde)
         return float(dc_interp(np.atleast_1d(np.asarray(z, dtype=np.float64)))[0])
-    elif model_id == 4: #cos_cosh
-        w_a = _get_param(theta, params, "w_a")
-        w_b = _get_param(theta, params, "w_b")
-        w_c = _get_param(theta, params, "w_c")
-        Omega_m = _get_param(theta, params, "Omega_m")
-    
-    return _comoving_distance_single(float(z), H0, Omega_m, x, w_a, w_b, w_c, model_id)
+
+    theta_vector = _build_param_vector(model_id, theta, params)
+    return _comoving_distance_single(float(z), H0, theta_vector, model_id, n=n)
+
+    #if model_id == 0:
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #if model_id == 1: # barotropic UG
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #    x = _get_param(theta, params, "x")
+    #elif model_id == 4: #cos_cosh
+    #    w_a = _get_param(theta, params, "w_a")
+    #    w_b = _get_param(theta, params, "w_b")
+    #    w_c = _get_param(theta, params, "w_c")
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #elif model_id == 5: #LCDM_baryon
+    #    Omega_dm0 = _get_param(theta, params, "Omega_dm0")
+    #    Omega_b0 = _get_param(theta, params, "Omega_b0")
+    #    Omega_m = Omega_dm0 + Omega_b0
+
 
 def comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], theta : np.ndarray, params: list, model : str = "flat_LCDM") -> np.ndarray[Any, np.dtype[np.float64]]:
     H0 = _get_param(theta, params, "H0")
-
-    x = 0.0
-    w_a = 0.0
-    w_b = 0.0
-    w_c = 0.0
     model_id = np.int64(_get_model_id(model))
-    if model_id == 0:
-        Omega_m = _get_param(theta, params, "Omega_m")
-    if model_id == 1: # barotropic UG
-        Omega_m = _get_param(theta, params, "Omega_m")
-        x = _get_param(theta, params, "x")
-    elif model_id == 2:
+
+    if model_id == 2:
         omega_xi = _get_param(theta, params, "omega_xi")
         Omega_m = _get_param(theta, params, "Omega_m")
         _, dc_interp = _get_csl_interpolators(H0, Omega_m, omega_xi)
@@ -180,15 +189,25 @@ def comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], the
         xi_tilde = _get_param(theta, params, "xi_tilde")
         _, dc_interp = _get_csl_baryon_interpolators_z(H0, Omega_b0, Omega_dm0, xi_tilde)
         return dc_interp(z_array.astype(np.float64))
-    elif model_id == 4:
-        w_a = _get_param(theta, params, "w_a")
-        w_b = _get_param(theta, params, "w_b")
-        w_c = _get_param(theta, params, "w_c")
-        Omega_m = _get_param(theta, params, "Omega_m")
+    theta_vector = _build_param_vector(model_id, theta, params)
+    #if model_id == 0:
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #if model_id == 1: # barotropic UG
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #    x = _get_param(theta, params, "x")
+    #elif model_id == 4:
+    #    w_a = _get_param(theta, params, "w_a")
+    #    w_b = _get_param(theta, params, "w_b")
+    #    w_c = _get_param(theta, params, "w_c")
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #elif model_id == 5:
+    #    Omega_dm0 = _get_param(theta, params, "Omega_dm0")
+    #    Omega_b0 = _get_param(theta, params, "Omega_b0")
+    #    Omega_m = Omega_dm0 + Omega_b0
 
     sorted_idx = np.argsort(z_array)
     z_sorted = z_array[sorted_idx].astype(np.float64)
-    d_sorted = _comoving_distance_array(z_sorted, H0, Omega_m, x, w_a, w_b, w_c, model_id)
+    d_sorted = _comoving_distance_array(z_sorted, H0, theta_vector, model_id)
 
     result = np.empty_like(z_array)
     result[sorted_idx] = d_sorted
@@ -255,18 +274,8 @@ def ad_between_distances(z1: float, z2 : float, theta : np.ndarray, params: list
         raise ValueError(f"z2 debe ser mayor que z1. Recibido: z1={z1}, z2={z2}")
     
     H0 = _get_param(theta, params, "H0")
-    
-    x = 0.0
-    w_a = 0.0
-    w_b = 0.0
-    w_c = 0.0
     model_id = np.int64(_get_model_id(model))
-    if model_id == 0:
-        Omega_m = _get_param(theta, params, "Omega_m")
-    if model_id == 1: # barotropic UG
-        Omega_m = _get_param(theta, params, "Omega_m")
-        x = _get_param(theta, params, "x")
-    elif model_id == 2: # CSL UG
+    if model_id == 2: # CSL UG
         omega_xi = _get_param(theta, params, "omega_xi")
         Omega_m = _get_param(theta, params, "Omega_m")
         _, dc_interp = _get_csl_interpolators(H0, Omega_m, omega_xi)
@@ -281,13 +290,23 @@ def ad_between_distances(z1: float, z2 : float, theta : np.ndarray, params: list
         dc_z1 = float(dc_interp(np.atleast_1d(np.asarray(z1, dtype=np.float64)))[0])
         dc_z2 = float(dc_interp(np.atleast_1d(np.asarray(z2, dtype=np.float64)))[0])
         return (dc_z2 - dc_z1) / (1.0 + z2)
-    elif model_id == 4:
-        Omega_m = _get_param(theta, params, "Omega_m")
-        w_a = _get_param(theta, params, "w_a")
-        w_b = _get_param(theta, params, "w_b")
-        w_c = _get_param(theta, params, "w_c")
+    theta_vector = _build_param_vector(model_id, theta, params)
+    #if model_id == 0:
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #if model_id == 1: # barotropic UG
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #    x = _get_param(theta, params, "x")
+    #elif model_id == 4:
+    #    Omega_m = _get_param(theta, params, "Omega_m")
+    #    w_a = _get_param(theta, params, "w_a")
+    #    w_b = _get_param(theta, params, "w_b")
+    #    w_c = _get_param(theta, params, "w_c")
+    #elif model_id == 5:
+    #    Omega_dm0 = _get_param(theta, params, "Omega_dm0")
+    #    Omega_b0 = _get_param(theta, params, "Omega_b0")
+    #    Omega_m = Omega_dm0 + Omega_b0
 
-    return _angular_diameter_distance_between(float(z1), float(z2), H0, Omega_m, x, w_a, w_b, w_c, model_id)
+    return _angular_diameter_distance_between(float(z1), float(z2), H0, theta_vector, model_id)
 
 def dv_rd(z: float, theta: np.ndarray, params: list, rd: float, model: str = "flat_LCDM") -> float:
     """
@@ -354,17 +373,8 @@ def dh_rd(z: float, theta: np.ndarray, params: list, rd: float, model: str = "fl
 def H_array(z_array: np.ndarray, theta: np.ndarray, params: list, model: str = "flat_LCDM") -> np.ndarray:
     H0 = _get_param(theta, params, "H0")
     model_id = np.int64(_get_model_id(model))
-    x = 0.0
-    w_a = 0.0
-    w_b = 0.0
-    w_c = 0.0
-    if model_id == 0:
-        omega_m = _get_param(theta, params, "Omega_m")
 
-    if model_id == 1:
-        omega_m = _get_param(theta, params, "Omega_m")
-        x = _get_param(theta, params, "x")
-    elif model_id == 2:
+    if model_id == 2:
         omega_xi = _get_param(theta, params, "omega_xi")
         omega_m = _get_param(theta, params, "Omega_m")
         H_interp, _ = _get_csl_interpolators(H0, omega_m, omega_xi)
@@ -375,21 +385,71 @@ def H_array(z_array: np.ndarray, theta: np.ndarray, params: list, model: str = "
         xi_tilde = _get_param(theta, params, "xi_tilde")
         H_interp, _ = _get_csl_baryon_interpolators_z(H0, Omega_b0, Omega_dm0, xi_tilde)
         return H_interp(z_array.astype(np.float64))
-    elif model_id == 4:
-            omega_m = _get_param(theta, params, "Omega_m")
-            w_a = _get_param(theta, params, "w_a")
-            w_b = _get_param(theta, params, "w_b")
-            w_c = _get_param(theta, params, "w_c")
-    return _H_array_numba(z_array, H0, omega_m, x, w_a, w_b, w_c, model_id)
 
+    theta_vector = _build_param_vector(model_id, theta, params)
+    #if model_id == 0:
+    #    omega_m = _get_param(theta, params, "Omega_m")
+    #if model_id == 1:
+    #    omega_m = _get_param(theta, params, "Omega_m")
+    #    x = _get_param(theta, params, "x")
+    #elif model_id == 4:
+    #        omega_m = _get_param(theta, params, "Omega_m")
+    #        w_a = _get_param(theta, params, "w_a")
+    #        w_b = _get_param(theta, params, "w_b")
+    #        w_c = _get_param(theta, params, "w_c")
+    #elif model_id == 5:
+    #    Omega_dm0 = _get_param(theta, params, "Omega_dm0")
+    #    Omega_b0 = _get_param(theta, params, "Omega_b0")
+    #    omega_m = Omega_dm0 + Omega_b0
+    return _H_array_numba(z_array, H0, theta_vector, model_id)
 
+def z_star(omega_m_h2, omega_b_h2):
+    g_1 = 0.0738 * (omega_b_h2)**(-0.238) / (1+39.5 * (omega_b_h2)**0.763)
+    g_2 = 0.560 / (1+21.1*omega_b_h2**1.81)
+    z_star = 1048 * (1 + 0.00124 * (omega_b_h2)**(-0.738)) * (1 + g_1 * (omega_m_h2)**g_2)
+    return z_star
+
+def shift_parameter(z_star, theta, params, model = "flat_LCDM"):
+    H0 = _get_param(theta, params, "H0")
+    if model in ("LCDM_baryon", "UG_CSL_baryon"):
+        Omega_dm0 = _get_param(theta, params, "Omega_dm0")
+        Omega_b0 = _get_param(theta, params, "Omega_b0")
+        Omega_m0 = Omega_dm0 + Omega_b0
+    else:
+        Omega_m0 = _get_param(theta, params, "Omega_m")
+
+    dc = comoving_distance(z_star, theta, params, model)
+    R = np.sqrt(Omega_m0) * dc * H0 / c
+    return float(R)
+
+def recombination_sound_horizon(omega_m_h2, omega_b_h2, omega_gamma_h2 = 2.469e-5):
+
+    z_eq = 2.5e4 * omega_m_h2 * (T_CMB / 2.7)**(-4)
+
+    b1 = 0.313 * (omega_m_h2)**(-0.419)*(1+0.607*(omega_m_h2)**0.674)
+    b2 = 0.238 * (omega_m_h2)**0.223
+    z_d = 1291 * (omega_m_h2)**0.251 / (1 + 0.659*(omega_m_h2)**0.828) * (1 + b1*(omega_b_h2)**b2)
+    k_eq = 7.46e-2 * omega_m_h2 * (T_CMB / 2.7)**(-2)  # Mpc^-1
+    photon_baryon_d = 31.5*omega_b_h2*(T_CMB/2.7)**(-4) * (z_d / 1000)**(-1)
+    photon_baryon_eq = 31.5*omega_b_h2*(T_CMB/2.7)**(-4) * (z_eq / 1000)**(-1)
+
+    log_term = np.log((np.sqrt(1+photon_baryon_d) + np.sqrt(photon_baryon_eq + photon_baryon_d))/(1 + np.sqrt(photon_baryon_eq)))
+
+    return 2/(3*k_eq) * np.sqrt(6/photon_baryon_eq) * log_term
+
+def planck_acoustic_scale(z_star, rs_value, theta, params, model = "flat_LCDM"):
+    dc = comoving_distance(z_star, theta, params, model, n=3000)
+    l_a = np.pi * dc / rs_value
+    return float(l_a)
+
+    
 @njit(fastmath=True)
-def _H_array_numba(z_array, H0, omega_m, x, w_a, w_b, w_c, model_id):
+def _H_array_numba(z_array, H0, theta_vector, model_id):
     n_z = z_array.size
     H_array = np.empty(n_z)
     for k in range(n_z):
         zk = z_array[k]
-        Ez = _E_dispatch(zk, omega_m, x, w_a, w_b, w_c, model_id)
+        Ez = _E_dispatch(zk, theta_vector, model_id)
         H_array[k] = H0 * Ez
     return H_array
 
@@ -407,21 +467,29 @@ def _E_coscosh_model(z: float, omega_m: float, w_a: float, w_b: float, w_c: floa
     a = 1.0 / (1.0 + z)
     rho_de = np.exp(-3 * ((1-w_c) * np.log(a) - w_b * (np.sinh(a) - np.sinh(1)) + w_a * (np.sin(a) - np.sin(1))))
     return (omega_m * (1.0 + z)**3 + (1.0 - omega_m) * rho_de) ** 0.5
+
 @njit(fastmath=True)
-def _E_dispatch(z, omega_m, x, w_a = 0, w_b = 0, w_c = 0, model_id = 0):
-    if model_id == 0:
-        return _E_flat_lcdm(z, omega_m)
-    elif model_id == 1:
-        return _E_barotropic_model(z, omega_m, x)
+def _E_LCDMb(z: float, omega_dm: float, omega_b: float) -> float:
+    omega_lambda = 1.0 - omega_dm - omega_b
+    return (omega_dm * (1.0 + z)**3 + omega_b * (1.0 + z)**3 + omega_lambda) ** 0.5
+
+@njit(fastmath=True)
+def _E_dispatch(z, model_id, p):
+    if model_id == 0: # flat LCDM
+        return _E_flat_lcdm(z, p[1]) # omega_m
+    elif model_id == 1: # barotropic UG
+        return _E_barotropic_model(z, p[1], p[2]) # omega_m, x
 #    elif model_id == 2:
 #        return _E_csl(z, omega_m, x)
-    elif model_id == 4:
-        return _E_coscosh_model(z, omega_m, w_a, w_b, w_c)
+    elif model_id == 4: # dark energy cos cosh
+        return _E_coscosh_model(z, p[1], p[2], p[3], p[4]) # omega_m, w_a, w_b, w_c
+    elif model_id == 5: # LCDM with baryons
+        return _E_LCDMb(z, p[1], p[2]) # omega_dm, omega_b
     else:
         return -1.0
     
 @njit(fastmath=True)
-def _comoving_distance_single(z : float, H0 : float, omega_m : float, x : float, w_a, w_b, w_c, model_id : int, n : int = 300) -> float:
+def _comoving_distance_single(z : float, H0 : float, theta_vector : np.ndarray, model_id : int, n : int = 300) -> float:
     if z <= 0.0:
         return 0.0
 
@@ -430,13 +498,13 @@ def _comoving_distance_single(z : float, H0 : float, omega_m : float, x : float,
     for k in range(n+1):
         zp = k * dz
         w = 0.5 if (k==0 or k==n) else 1.0
-        Ez = _E_dispatch(zp, omega_m, x, w_a, w_b, w_c, model_id)
+        Ez = _E_dispatch(zp, model_id, theta_vector)
         integral += w/Ez
     
     return (c/ H0) * dz * integral
 
 @njit(parallel = True, fastmath=True)
-def _comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], H0 : float, omega_m : float, x : float, w_a, w_b, w_c, model_id : int, n : int = 300) -> np.ndarray[Any, np.dtype[np.float64]]:
+def _comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], H0 : float, theta_vector: np.ndarray, model_id : int, n : int = 300) -> np.ndarray[Any, np.dtype[np.float64]]:
 
     z_max = z_array[-1]
     dz = z_max / (n-1)
@@ -444,7 +512,7 @@ def _comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], H0
     integrand = np.empty(n)
     for k in prange(n):
         zp = k * dz
-        Ez = _E_dispatch(zp, omega_m, x, w_a, w_b, w_c, model_id)
+        Ez = _E_dispatch(zp, model_id, theta_vector)
         integrand[k] = 1.0 / Ez
     d_grid = np.empty(n)
     d_grid[0] = 0.0
@@ -471,14 +539,14 @@ def _comoving_distance_array(z_array : np.ndarray[Any, np.dtype[np.float64]], H0
     return result
 
 @njit(fastmath=True)
-def _angular_diameter_distance_between(z1 : float, z2 : float, H0 : float, omega_m : float, x : float, w_a, w_b, w_c, model_id : int, n : int = 300) -> float:
+def _angular_diameter_distance_between(z1 : float, z2 : float, H0 : float, theta_vector: np.ndarray, model_id : int, n : int = 300) -> float:
     
     dz = (z2-z1) / n
     integral = 0.0
     for k in range(n+1):
         zp = z1 + k * dz
         w = 0.5 if (k==0 or k==n) else 1.0
-        Ez = _E_dispatch(zp, omega_m, x, w_a, w_b, w_c, model_id)
+        Ez = _E_dispatch(zp, model_id, theta_vector)
         integral += w/Ez
     dc_12 = (c/ H0) * dz * integral
     return dc_12 / (1.0 + z2)
@@ -792,6 +860,9 @@ def warmup():
     params_cos_cosh = ["H0", "omega_m", "w_a", "w_b", "w_c"]
     theta_cos_cosh  = np.array([70.0, 0.3, 0.1, 0.1, 0.1])
 
+    params_lcdmb = ["H0", "Omega_dm0", "Omega_b0"]
+    theta_lcdmb  = np.array([70.0, 0.25, 0.05])
+
     comoving_distance(0.5, theta_lcdm, params_lcdm)
     comoving_distance_array(z_test, theta_lcdm, params_lcdm)
     ad_between_distances(0.5, 1.5, theta_lcdm, params_lcdm)
@@ -804,10 +875,13 @@ def warmup():
     comoving_distance_array(z_test, theta_csl_a, params_csl_a, model="UG_CSL")
     ad_between_distances(0.5, 1.5, theta_csl_a, params_csl_a, model="UG_CSL")
 
-
     comoving_distance(0.5, theta_cos_cosh, params_cos_cosh, model="cos_cosh")
     comoving_distance_array(z_test, theta_cos_cosh, params_cos_cosh, model="cos_cosh")
     ad_between_distances(0.5, 1.5, theta_cos_cosh, params_cos_cosh, model="cos_cosh")
+ 
+    comoving_distance(0.5, theta_lcdmb, params_lcdmb, model="LCDM_baryon")
+    comoving_distance_array(z_test, theta_lcdmb, params_lcdmb, model="LCDM_baryon")
+    ad_between_distances(0.5, 1.5, theta_lcdmb, params_lcdmb, model="LCDM_baryon")
  
     print("cosmology.py: Numba kernels warmed up")
 
