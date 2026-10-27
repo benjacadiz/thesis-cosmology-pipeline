@@ -1,7 +1,7 @@
 from numba import njit
 import numpy as np
 from observables import mu_theoretical, Hz_theoretical,Ddt_theoretical, Dd_theoretical, Da_theoretical
-from cosmology import dv_rd, dm_rd, dh_rd
+from cosmology import dv_rd, dm_rd, dh_rd, z_star, recombination_sound_horizon, shift_parameter, planck_acoustic_scale
 from utils import _get_param, register_warmup
 
 G = 4.3009e-9 # Mpc M_sun^-1 (km/s)^2
@@ -171,6 +171,30 @@ def log_likelihood_bhs(theta: np.ndarray, params: list[str], data: dict, model: 
             return -np.inf
     return ll
 
+def log_likelihood_planck_compressed(theta: np.ndarray, params: list[str], data: dict, model: str = "flat_LCDM"):
+    H0 = _get_param(theta, params, "H0")
+    h = H0 / 100.0
+    if model == "LCDM_baryon":
+        wb = _get_param(theta, params, "omega_b0") * h**2
+        omega_m_h2 = (_get_param(theta, params, "omega_dm0") + _get_param(theta, params, "omega_b0")) * h**2
+    else:
+        wb = _get_param(theta, params, "wb")
+        omega_m_h2 = _get_param(theta, params, "omega_m") * h**2
+    if model == "UG_CSL_baryon":
+        raise NotImplementedError("Likelihood de Planck comprimido no implementado para UG_CSL_baryon")
+
+    zs = z_star(omega_m_h2, wb)
+    rs_val = recombination_sound_horizon(omega_m_h2, wb)
+
+    shift_th = shift_parameter(zs, theta, params, model)
+    lA_th = planck_acoustic_scale(zs, rs_val, theta, params, model)
+
+    th_vec = np.array([shift_th, lA_th])
+    delta = data["obs_vec"] - th_vec
+    delta = delta.flatten()
+    if not np.all(np.isfinite(delta)):
+        return -np.inf
+    return -0.5 * float(delta @ (data["cov_inv"] @ delta))
 
 def log_likelihood_combined(theta : np.ndarray, params : list[str], datasets : dict, model : str = "flat_LCDM"):
     
@@ -276,7 +300,8 @@ LIKELIHOODS_REGISTRY = {
     "pantheon+" : log_likelihood_sn,
     "h0licow" : log_likelihood_h0licow,
     "desi" : log_likelihood_desi,
-    "bhs" : log_likelihood_bhs
+    "bhs" : log_likelihood_bhs,
+    "planck_compressed" : log_likelihood_planck_compressed
 }
 
 @register_warmup

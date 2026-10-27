@@ -21,7 +21,7 @@ _DESI_TRACERS= {
     1.484: "ELG2",
     2.330: "Lya"}
 
-
+_KDES_DIRECTORY = "kdes"
 
 def load_ohd(filepath : str, zmin: float = 0.0 , zmax : float = np.inf) -> dict[str, np.ndarray]:
     """ 
@@ -179,6 +179,7 @@ def load_desi(filepath : str, filepath_cov : str = None) -> dict[str, np.ndarray
         raise ValueError("No se proporcionó un archivo de covarianza para DESI.")
 
     data = {"tracers": tracers, "obs_vec": obs_vec, "cov_inv": cov_inv, "rd" : None}
+    _summarize_desi(data)
     return data
 
 def load_h0licow(dirpath : str):
@@ -227,6 +228,20 @@ def load_bhs(filepath):
     _summarize_bhs(data)
     return data
 
+def load_planck(filepath):
+
+    obs_vec = np.array([1.7502, 301.471])  # [R, ell_A]
+    
+    sigmas = np.array([0.0046, 0.089])
+    corr = np.array([[1.00, 0.46],
+                     [0.46, 1.00]])
+    cov = np.outer(sigmas, sigmas) * corr
+    cov_inv = np.linalg.inv(cov)
+    
+
+    data = {"obs_vec": obs_vec, "cov_inv": cov_inv}
+    _summarize_planck(data)
+    return data
 
 def _load_redshifts(filepath):
     _check_file(filepath)
@@ -280,11 +295,11 @@ def _build_kde1d(samples, lens_name, weights=None, bandwidth=20, nbins=400, n_gr
     kde_bins = centers[mask].reshape(-1, 1)
     kde_weights = counts[mask].astype(np.float64)
 
-    if os.path.exists(f"kde1d_{lens_name}.joblib"):
-        kde = joblib.load(f"kde1d_{lens_name}.joblib")
+    if os.path.exists(f"{_KDES_DIRECTORY}/kde1d_{lens_name}.joblib"):
+        kde = joblib.load(f"{_KDES_DIRECTORY}/kde1d_{lens_name}.joblib")
     else: 
         kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth).fit(kde_bins, sample_weight=kde_weights)
-        joblib.dump(kde, f"kde1d_{lens_name}.joblib")
+        joblib.dump(kde, f"{_KDES_DIRECTORY}/kde1d_{lens_name}.joblib")
 
     grid_low = samples.min() - 3.0*bandwidth
     grid_high = samples.max() + 3.0*bandwidth
@@ -308,11 +323,11 @@ def _build_kde2d(dd, ddt, lens_name, weights=None, bandwidth=20, nbins=80, n_gri
     kde_bins = np.column_stack((DD.ravel()[mask], DDT.ravel()[mask]))
     kde_weights = counts_flat[mask].astype(np.float64)
 
-    if os.path.exists(f"kde2d_{lens_name}.joblib"):
-        kde = joblib.load(f"kde2d_{lens_name}.joblib")
+    if os.path.exists(f"{_KDES_DIRECTORY}/kde2d_{lens_name}.joblib"):
+        kde = joblib.load(f"{_KDES_DIRECTORY}/kde2d_{lens_name}.joblib")
     else:
         kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth).fit(kde_bins, sample_weight=kde_weights)
-        joblib.dump(kde, f"kde2d_{lens_name}.joblib")
+        joblib.dump(kde, f"{_KDES_DIRECTORY}/kde2d_{lens_name}.joblib")
 
     dd_low, dd_high = dd.min() - 3.0*bandwidth, dd.max() + 3.0*bandwidth
     ddt_low, ddt_high = ddt.min() - 3.0*bandwidth, ddt.max() + 3.0*bandwidth
@@ -333,11 +348,11 @@ def _build_kde2d_full(dd, ddt, lens_name, bandwidth=20, n_grid=200):
     from sklearn.neighbors import KernelDensity
 
     kde_bins = np.column_stack((dd, ddt))
-    if os.path.exists(f"kde2d_full_{lens_name}.joblib"):
-        kde = joblib.load(f"kde2d_full_{lens_name}.joblib")
+    if os.path.exists(f"{_KDES_DIRECTORY}/kde2d_full_{lens_name}.joblib"):
+        kde = joblib.load(f"{_KDES_DIRECTORY}/kde2d_full_{lens_name}.joblib")
     else:
         kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth).fit(kde_bins)
-        joblib.dump(kde, f"kde2d_full_{lens_name}.joblib")
+        joblib.dump(kde, f"{_KDES_DIRECTORY}/kde2d_full_{lens_name}.joblib")
 
     dd_low, dd_high = dd.min() - 3.0*bandwidth, dd.max() + 3.0*bandwidth
     ddt_low, ddt_high = ddt.min() - 3.0*bandwidth, ddt.max() + 3.0*bandwidth
@@ -488,6 +503,19 @@ def _summarize_bhs(data):
         print(f" BH {name:8s}, z = {data['z'][i]:.5f}"
               f" R = {data['R'][i]:.3f} ± {data['dR'][i]:.3f}"
               f" M = {data['M'][i]:.3e} ± {data['dM'][i]:.3e}")
+    print(f"{'─'*45}\n")
+
+def _summarize_planck(data):
+    print(f"\n{'─'*45}")
+    print("Dataset: Planck Compressed")
+    print(f"{'─'*45}")
+    print(f"  Observables: {data['obs_vec'].shape[1]}")
+    print(data["obs_vec"])
+    diag = np.diag(np.linalg.inv(data["cov_inv"]))
+    print(f"  sigma_diag rango : [{np.sqrt(diag.min()):.4f}, "
+          f"{np.sqrt(diag.max()):.4f}]")
+    print(f"{'─'*45}\n")
+    print(f"  Covariance matrix shape: {data['cov_inv'].shape}")
     print(f"{'─'*45}\n")
 
 def summarize(data, name, n_cut=0):
